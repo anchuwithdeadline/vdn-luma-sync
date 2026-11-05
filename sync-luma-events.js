@@ -58,8 +58,8 @@ async function syncLumaEvents() {
 
     const lumaUrl = `https://lu.ma/${ev.url}`;
     const description = ev.description
-      ? `${ev.description}\n\n👉 Đăng ký tại: ${lumaUrl}`.slice(0, 1000)
-      : `👉 Đăng ký tại: ${lumaUrl}`;
+      ? `${ev.description}\n\nĐăng ký tại: ${lumaUrl}`.slice(0, 1000)
+      : `Đăng ký tại: ${lumaUrl}`;
 
     const payload = {
       name: ev.name.slice(0, 100),
@@ -76,14 +76,21 @@ async function syncLumaEvents() {
     // Download cover image if present
     if (ev.cover_url) {
       try {
-        console.log(`- Fetching cover image from: ${ev.cover_url}`);
-        const imgRes = await fetch(ev.cover_url);
+        let coverUrl = ev.cover_url;
+        if (coverUrl.includes('images.lumacdn.com/') && !coverUrl.includes('cdn-cgi/image')) {
+          coverUrl = coverUrl.replace(
+            'https://images.lumacdn.com/',
+            'https://images.lumacdn.com/cdn-cgi/image/format=jpeg,fit=cover,quality=80,width=1200,height=630/'
+          );
+        }
+        console.log(`- Fetching optimized cover image from: ${coverUrl}`);
+        const imgRes = await fetch(coverUrl);
         if (imgRes.ok) {
           const buffer = Buffer.from(await imgRes.arrayBuffer());
           const mime = imgRes.headers.get('content-type') || 'image/jpeg';
           if (buffer.length <= 7 * 1024 * 1024) {
             payload.image = `data:${mime};base64,${buffer.toString('base64')}`;
-            console.log(`- Attached image (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
+            console.log(`- Attached image (${(buffer.length / 1024).toFixed(1)} KB)`);
           } else {
             console.log('- Image size > 7MB, skipped.');
           }
