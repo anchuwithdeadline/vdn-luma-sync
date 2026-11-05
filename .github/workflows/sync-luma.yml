@@ -1,0 +1,27 @@
+name: Sync Luma to Discord
+
+on:
+  schedule:
+    # Run every 60 minutes
+    - cron: '0 * * * *'
+  workflow_dispatch: # Allows 1-click manual run button in GitHub Actions tab
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Run Luma Sync
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          LUMA_CALENDAR_ID: ${{ secrets.LUMA_CALENDAR_ID || 'cal-4yoBq2YOKfqCfBj' }}
+          DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID || '1520303271787368508' }}
+          ANNOUNCEMENT_CHANNEL_ID: ${{ secrets.ANNOUNCEMENT_CHANNEL_ID || '1567848463440412734' }}
+        run: node sync-luma-events.js
