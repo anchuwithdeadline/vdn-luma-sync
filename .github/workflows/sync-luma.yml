@@ -2,8 +2,8 @@ name: Sync Luma to Discord
 
 on:
   schedule:
-    # Run every 60 minutes
-    - cron: '0 * * * *'
+    # Run every Thursday at 09:00 AM Vietnam time (02:00 UTC)
+    - cron: '0 2 * * 4'
   workflow_dispatch: # Allows 1-click manual run button in GitHub Actions tab
 
 jobs:

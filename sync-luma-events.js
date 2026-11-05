@@ -57,7 +57,9 @@ async function syncLumaEvents() {
     }
 
     const lumaUrl = `https://lu.ma/${ev.url}`;
-    const description = `${ev.description || 'Sự kiện do Vietnam Debate Network tổ chức.'}\n\n👉 Chi tiết & đăng ký vé: ${lumaUrl}`.slice(0, 1000);
+    const description = ev.description
+      ? `${ev.description}\n\nĐăng ký tại:\n👉 ${lumaUrl}`.slice(0, 1000)
+      : `Đăng ký tại:\n👉 ${lumaUrl}`;
 
     const payload = {
       name: ev.name.slice(0, 100),
