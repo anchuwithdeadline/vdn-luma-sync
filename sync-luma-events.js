@@ -1,7 +1,7 @@
-const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
-const GUILD_ID = process.env.DISCORD_GUILD_ID || '1520303271787368508';
-const LUMA_CALENDAR_ID = process.env.LUMA_CALENDAR_ID || 'cal-4yoBq2YOKfqCfBj';
-const ANNOUNCEMENT_CHANNEL_ID = process.env.ANNOUNCEMENT_CHANNEL_ID || '1567848463440412734';
+const BOT_TOKEN = (process.env.DISCORD_BOT_TOKEN || '').replace(/^\uFEFF/, '').trim();
+const GUILD_ID = (process.env.DISCORD_GUILD_ID || '1520303271787368508').replace(/^\uFEFF/, '').trim();
+const LUMA_CALENDAR_ID = (process.env.LUMA_CALENDAR_ID || 'cal-4yoBq2YOKfqCfBj').replace(/^\uFEFF/, '').trim();
+const ANNOUNCEMENT_CHANNEL_ID = (process.env.ANNOUNCEMENT_CHANNEL_ID || '1567848463440412734').replace(/^\uFEFF/, '').trim();
 
 if (!BOT_TOKEN) {
   console.error('❌ Error: DISCORD_BOT_TOKEN environment variable is required.');
