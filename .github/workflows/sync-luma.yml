@@ -18,6 +18,9 @@ jobs:
         with:
           node-version: 22
 
+      - name: Test sync behavior
+        run: node --test
+
       - name: Run Luma Sync
         env:
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
