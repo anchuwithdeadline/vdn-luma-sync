@@ -17,24 +17,55 @@ function lumaKeys(text) {
   });
 }
 
-function buildNotificationPayload(ev, location, lumaUrl, isReminder = false) {
+function optimizeCoverUrl(url) {
+  if (!url) return null;
+  if (url.includes('images.lumacdn.com/') && !url.includes('cdn-cgi/image')) {
+    return url.replace(
+      'https://images.lumacdn.com/',
+      'https://images.lumacdn.com/cdn-cgi/image/format=jpeg,fit=cover,quality=80,width=1200,height=630/'
+    );
+  }
+  return url;
+}
+
+function formatLocation(raw) {
+  return String(raw || 'Online')
+    .replace(/,\s*French Quarter/gi, '')
+    .replace(/\s+\d{5,6}(?=,|$)/g, '')
+    .replace(/,\s*(?:Vietnam|Việt Nam)$/i, '')
+    .replace(/^([^,]+-\s*(\d+\s+[^,]+)),\s*\d+\s+(?:P\.\s*)?\2/i, '$1');
+}
+
+function buildNotificationPayload(ev, location, lumaUrl, coverUrl, isReminder = false) {
   const startDate = new Date(ev.start_at);
   const endDate = new Date(ev.end_at || startDate.getTime() + 2 * 3600 * 1000);
-  const timeStr = `${startDate.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} - ${endDate.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} (${startDate.toLocaleDateString('vi-VN')})`;
-  const title = isReminder ? `⏰ NHẮC LỊCH: ${ev.name}` : `📢 SỰ KIỆN MỚI: ${ev.name}`;
+  const tz = { timeZone: 'Asia/Ho_Chi_Minh' };
+  const startClock = startDate.toLocaleTimeString('vi-VN', { ...tz, hour: '2-digit', minute: '2-digit', hour12: false });
+  const endClock = endDate.toLocaleTimeString('vi-VN', { ...tz, hour: '2-digit', minute: '2-digit', hour12: false });
+  const weekday = startDate.toLocaleDateString('vi-VN', { ...tz, weekday: 'long' });
+  const datePart = startDate.toLocaleDateString('vi-VN', { ...tz, day: '2-digit', month: '2-digit', year: 'numeric' });
+  const unixStart = Math.floor(startDate.getTime() / 1000);
+  const timeStr = `${startClock} – ${endClock} · ${weekday}, ${datePart} (<t:${unixStart}:R>)`;
+
+  const authorName = isReminder ? '⏰ NHẮC LỊCH · CÒN 7 NGÀY' : '📢 SỰ KIỆN MỚI';
   const lead = isReminder
-    ? 'Sự kiện của Vietnam Debate Network sẽ diễn ra sau **7 ngày** nữa! Hãy nhanh tay đăng ký nếu bạn chưa có vé nhé.'
+    ? 'Sự kiện của Vietnam Debate Network sẽ diễn ra vào tuần sau! Hãy đăng ký tham gia sớm nhé.'
     : 'Vietnam Debate Network vừa mở đăng ký sự kiện mới trên Luma!';
+
+  const embed = {
+    author: { name: authorName },
+    title: ev.name,
+    url: lumaUrl,
+    description: `${lead}\n\n🗓️ **Thời gian:** ${timeStr}\n📍 **Địa điểm:** ${location}`,
+    color: 0x5865F2,
+    footer: { text: 'VDN Meetup' },
+    timestamp: new Date().toISOString()
+  };
+  if (coverUrl) embed.image = { url: coverUrl };
 
   return {
     content: '@everyone',
-    embeds: [{
-      title,
-      description: `${lead}\n\n🗓️ **Thời gian:** ${timeStr}\n📍 **Địa điểm:** ${location}`,
-      color: 0x5865F2,
-      footer: { text: 'VDN Meetup' },
-      timestamp: new Date().toISOString()
-    }],
+    embeds: [embed],
     components: [{
       type: 1,
       components: [{ type: 2, style: 5, label: '🎟️ Đăng Ký Tham Gia', url: lumaUrl }]
@@ -106,9 +137,9 @@ async function syncLumaEvents() {
     // Determine event location
     let locationStr = 'Online';
     if (ev.geo_address_info && ev.geo_address_info.full_address) {
-      locationStr = ev.geo_address_info.full_address;
+      locationStr = formatLocation(ev.geo_address_info.full_address);
     } else if (ev.geo_address_info && ev.geo_address_info.address) {
-      locationStr = ev.geo_address_info.address;
+      locationStr = formatLocation(ev.geo_address_info.address);
     }
 
     const registration = `Đăng ký tại: ${lumaUrl}`;
@@ -129,15 +160,9 @@ async function syncLumaEvents() {
     };
 
     // Download cover image if present
-    if (ev.cover_url) {
+    const coverUrl = optimizeCoverUrl(ev.cover_url);
+    if (coverUrl) {
       try {
-        let coverUrl = ev.cover_url;
-        if (coverUrl.includes('images.lumacdn.com/') && !coverUrl.includes('cdn-cgi/image')) {
-          coverUrl = coverUrl.replace(
-            'https://images.lumacdn.com/',
-            'https://images.lumacdn.com/cdn-cgi/image/format=jpeg,fit=cover,quality=80,width=1200,height=630/'
-          );
-        }
         console.log(`- Fetching optimized cover image from: ${coverUrl}`);
         const imgRes = await fetch(coverUrl);
         if (imgRes.ok) {
@@ -174,10 +199,10 @@ async function syncLumaEvents() {
         }
         // ponytail: scan last 50 channel messages instead of external state DB; upgrade if channel exceeds 50 msgs/day
         const alreadyReminded = Array.isArray(channelMessages) && channelMessages.some(
-          msg => msg.embeds?.some(e => e.title?.startsWith('⏰ NHẮC LỊCH:')) && lumaKeys(JSON.stringify(msg)).includes(key)
+          msg => msg.embeds?.some(e => e.author?.name?.startsWith('⏰') || e.title?.startsWith('⏰')) && lumaKeys(JSON.stringify(msg)).includes(key)
         );
         if (!alreadyReminded) {
-          const reminderBody = buildNotificationPayload(ev, payload.entity_metadata.location, lumaUrl, true);
+          const reminderBody = buildNotificationPayload(ev, payload.entity_metadata.location, lumaUrl, coverUrl, true);
           console.log('- Sending 7-day reminder in announcements channel...');
           await fetch(`https://discord.com/api/v10/channels/${ANNOUNCEMENT_CHANNEL_ID}/messages`, {
             method: 'POST',
@@ -203,7 +228,7 @@ async function syncLumaEvents() {
       discordEvents.push(created);
       console.log(`🎉 Successfully created Discord Scheduled Event: ${created.name} (ID: ${created.id})`);
 
-      const notifyBody = buildNotificationPayload(ev, payload.entity_metadata.location, lumaUrl, false);
+      const notifyBody = buildNotificationPayload(ev, payload.entity_metadata.location, lumaUrl, coverUrl, false);
       console.log('- Sending announcement notification in announcements channel...');
       await fetch(`https://discord.com/api/v10/channels/${ANNOUNCEMENT_CHANNEL_ID}/messages`, {
         method: 'POST',

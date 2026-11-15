@@ -142,5 +142,6 @@ test('sends 7-day reminder once for an existing event starting in 7 days', async
   const writes = await run({ events: [reminderEvent, reminderEvent] });
   assert.deepEqual(writes.map(write => write.method), ['PATCH', 'POST', 'PATCH']);
   assert.ok(writes[1].url.endsWith('/messages'));
-  assert.ok(writes[1].body.embeds[0].title.startsWith('⏰ NHẮC LỊCH:'));
+  assert.equal(writes[1].body.embeds[0].author.name, '⏰ NHẮC LỊCH · CÒN 7 NGÀY');
+  assert.equal(writes[1].body.embeds[0].title, lumaEvent.name);
 });
