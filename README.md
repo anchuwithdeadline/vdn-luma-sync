@@ -6,6 +6,8 @@ Existing scheduled external events are matched by their Luma registration URL, t
 
 For older Discord entries without a Luma URL, matching falls back to the event name. Events with a different Luma URL are not matched by name. Ambiguous matches and failed Discord reads or updates fail the run. Active, completed, and cancelled entries are left unchanged.
 
-New events are created and announced with the existing `@everyone` notification. The registration URL is always retained at the end of the description so long descriptions cannot break future matching. This sync does not delete Discord events or remove a cover when Luma has no cover.
+New events are created and announced with the existing `@everyone` notification. Hanoi and Saigon events are also routed to `#📍│hanoi` and `#📍│saigon` (without `@everyone`). The registration URL is always retained at the end of the description so long descriptions cannot break future matching. This sync does not delete Discord events or remove a cover when Luma has no cover.
+
+In addition to Luma meetups, each run syncs upcoming tournaments from `https://vdn.moji.education/calendar` into `#🏆│championships` (updating the pinned overview embed, posting new tournaments and 7-day tournament reminders, and auto-publishing via Discord `crosspost` exclusively in `#🏆│championships`).
 
 GitHub Actions runs daily at 09:00 Asia/Saigon (`0 2 * * *`) and supports manual runs. Run `node --test` locally to check matching and update behavior without contacting live services.

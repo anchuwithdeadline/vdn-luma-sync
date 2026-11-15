@@ -2,6 +2,10 @@ const BOT_TOKEN = (process.env.DISCORD_BOT_TOKEN || '').replace(/^\uFEFF/, '').t
 const GUILD_ID = (process.env.DISCORD_GUILD_ID || '1520303271787368508').replace(/^\uFEFF/, '').trim();
 const LUMA_CALENDAR_ID = (process.env.LUMA_CALENDAR_ID || 'cal-4yoBq2YOKfqCfBj').replace(/^\uFEFF/, '').trim();
 const ANNOUNCEMENT_CHANNEL_ID = (process.env.ANNOUNCEMENT_CHANNEL_ID || '1567848463440412734').replace(/^\uFEFF/, '').trim();
+const HANOI_CHANNEL_ID = (process.env.HANOI_CHANNEL_ID || '1567848470809804820').replace(/^\uFEFF/, '').trim();
+const SAIGON_CHANNEL_ID = (process.env.SAIGON_CHANNEL_ID || '1567848472827138132').replace(/^\uFEFF/, '').trim();
+const CHAMPIONSHIPS_CHANNEL_ID = (process.env.CHAMPIONSHIPS_CHANNEL_ID || '1567848466904916078').replace(/^\uFEFF/, '').trim();
+const VDN_CALENDAR_URL = (process.env.VDN_CALENDAR_URL || 'https://vdn.moji.education/calendar').replace(/^\uFEFF/, '').trim();
 
 if (!BOT_TOKEN) {
   console.error('❌ Error: DISCORD_BOT_TOKEN environment variable is required.');
@@ -34,6 +38,153 @@ function formatLocation(raw) {
     .replace(/\s+\d{5,6}(?=,|$)/g, '')
     .replace(/,\s*(?:Vietnam|Việt Nam)$/i, '')
     .replace(/^([^,]+-\s*(\d+\s+[^,]+)),\s*\d+\s+(?:P\.\s*)?\2/i, '$1');
+}
+
+function resolveCityChannelId(ev) {
+  const haystack = [ev.name, ev.geo_address_info?.region, ev.geo_address_info?.city, ev.geo_address_info?.full_address]
+    .filter(Boolean)
+    .join(' ');
+  if (/\b(?:hanoi|hà nội)\b/i.test(haystack)) return HANOI_CHANNEL_ID;
+  if (/\b(?:saigon|sài gòn|ho chi minh|hồ chí minh|hcm|tphcm)\b/i.test(haystack)) return SAIGON_CHANNEL_ID;
+  return null;
+}
+
+function parseCalendarHtml(html) {
+  const rowRe = /<tr[^>]*>\s*<td data-label="Ngày thi đấu">([^<]+)<\/td>\s*<td data-label="Giải đấu"><a[^>]+href="([^"]+)"[^>]*>([^<]+)<\/a><\/td>\s*<td data-label="Ban tổ chức">([^<]+)<\/td>\s*<td data-label="Thể thức">([^<]+)<\/td>\s*<td data-label="Địa điểm\/Hình thức">([^<]+)<\/td>\s*<\/tr>/g;
+  return [...String(html || '').matchAll(rowRe)].map(m => {
+    const dates = m[1].trim();
+    const dm = dates.match(/(\d{1,2})(?:\s*[–-]\s*\d{1,2})?\/(\d{1,2})\/(\d{4})/);
+    const startMs = dm ? Date.UTC(Number(dm[3]), Number(dm[2]) - 1, Number(dm[1]), 1, 0, 0) : NaN;
+    return {
+      dates,
+      url: m[2].trim(),
+      name: m[3].trim(),
+      organizer: m[4].trim(),
+      format: m[5].trim(),
+      location: m[6].trim(),
+      startMs
+    };
+  });
+}
+
+function buildTournamentPayload(t, isReminder = false) {
+  const authorName = isReminder ? '⏰ NHẮC LỊCH GIẢI ĐẤU · CÒN 7 NGÀY' : '🏆 GIẢI ĐẤU MỚI';
+  const lead = isReminder
+    ? 'Giải đấu thuộc hệ thống **VDN Championships** sẽ khởi tranh vào tuần sau!'
+    : 'Giải đấu mới trong hệ thống **VDN Championships** đã được cập nhật trên lịch giải đấu!';
+  return {
+    content: '@everyone',
+    embeds: [{
+      author: { name: authorName },
+      title: `🏆 ${t.name}`,
+      url: t.url,
+      description: `${lead}\n\n🗓️ **Ngày thi đấu:** ${t.dates}\n🏛️ **Ban tổ chức:** ${t.organizer}\n⚖️ **Thể thức:** ${t.format}\n📍 **Hình thức:** ${t.location}`,
+      color: 0xF1C40F,
+      footer: { text: 'VDN Championships' },
+      timestamp: new Date().toISOString()
+    }],
+    components: [{
+      type: 1,
+      components: [{ type: 2, style: 5, label: '🏆 Xem Chi Tiết Giải Đấu', url: t.url }]
+    }]
+  };
+}
+
+async function crosspostChampionshipMessage(headers, messageId) {
+  if (!messageId) return;
+  const res = await fetch(`https://discord.com/api/v10/channels/${CHAMPIONSHIPS_CHANNEL_ID}/messages/${messageId}/crosspost`, {
+    method: 'POST',
+    headers
+  });
+  if (res.ok) console.log(`📢 Auto-published message ${messageId} in #championships`);
+}
+
+async function syncTournaments(headers, now) {
+  try {
+    const calRes = await fetch(VDN_CALENDAR_URL, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+    if (!calRes || !calRes.ok) return;
+    const html = await calRes.text();
+    const tournaments = parseCalendarHtml(html);
+    if (!tournaments.length) return;
+
+    console.log(`\n3. Syncing ${tournaments.length} tournament(s) from VDN Calendar to #championships...`);
+    const msgRes = await fetch(`https://discord.com/api/v10/channels/${CHAMPIONSHIPS_CHANNEL_ID}/messages?limit=50`, { headers });
+    if (!msgRes.ok) return;
+    const champMessages = await msgRes.json();
+    if (!Array.isArray(champMessages)) return;
+    const initialSnapshot = JSON.stringify(champMessages);
+
+    const overviewMsg = champMessages.find(m => m.embeds?.[0]?.title?.includes('VDN CHAMPIONSHIPS'));
+    if (overviewMsg) {
+      const embed = JSON.parse(JSON.stringify(overviewMsg.embeds[0]));
+      const oldFields = embed.fields || [];
+      const introField = oldFields.find(f => f.name.includes('Lịch giải đấu')) || {
+        name: '🗓️ Lịch giải đấu',
+        value: `Lịch giải đấu trong hệ thống được cập nhật tại [vdn.moji.education/calendar](${VDN_CALENDAR_URL}).`,
+        inline: false
+      };
+      const footerField = oldFields.find(f => f.name.includes('Kênh chỉ đọc'));
+      const tourneyFields = tournaments.map(t => {
+        const icon = /university/i.test(t.name) ? '🎓' : /school/i.test(t.name) ? '🏫' : '🏆';
+        return {
+          name: `${icon} ${t.name}`,
+          value: `${t.dates} · ${t.format} · ${t.location}\n[Xem chi tiết giải đấu](${t.url})`,
+          inline: false
+        };
+      });
+      const newFields = [introField, ...tourneyFields, ...(footerField ? [footerField] : [])];
+      if (JSON.stringify(oldFields) !== JSON.stringify(newFields)) {
+        embed.fields = newFields;
+        const patchRes = await fetch(`https://discord.com/api/v10/channels/${CHAMPIONSHIPS_CHANNEL_ID}/messages/${overviewMsg.id}`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ content: overviewMsg.content || '', embeds: [embed], components: overviewMsg.components || [] })
+        });
+        if (patchRes.ok) console.log(`✅ Updated pinned VDN Championships overview (ID: ${overviewMsg.id})`);
+      }
+      if (((overviewMsg.flags || 0) & 1) === 0) {
+        await crosspostChampionshipMessage(headers, overviewMsg.id);
+      }
+    }
+
+    for (const t of tournaments) {
+      if (!initialSnapshot.includes(t.url)) {
+        const body = buildTournamentPayload(t, false);
+        const postRes = await fetch(`https://discord.com/api/v10/channels/${CHAMPIONSHIPS_CHANNEL_ID}/messages`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body)
+        });
+        if (postRes.ok) {
+          const created = await postRes.json();
+          await crosspostChampionshipMessage(headers, created.id);
+        }
+        continue;
+      }
+
+      const msUntilStart = t.startMs - now;
+      if (msUntilStart > 6 * DAY_MS && msUntilStart <= 7.6 * DAY_MS) {
+        const alreadyReminded = champMessages.some(
+          m => m.embeds?.some(e => e.author?.name?.startsWith('⏰') || e.title?.startsWith('⏰')) && JSON.stringify(m).includes(t.url)
+        );
+        if (!alreadyReminded) {
+          const body = buildTournamentPayload(t, true);
+          const postRes = await fetch(`https://discord.com/api/v10/channels/${CHAMPIONSHIPS_CHANNEL_ID}/messages`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body)
+          });
+          if (postRes.ok) {
+            const created = await postRes.json();
+            champMessages.push(body);
+            await crosspostChampionshipMessage(headers, created.id);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('Could not sync tournaments:', err.message);
+  }
 }
 
 function buildNotificationPayload(ev, location, lumaUrl, coverUrl, isReminder = false) {
@@ -93,12 +244,15 @@ async function syncLumaEvents() {
     return event?.visibility === 'public' && Date.parse(event.start_at) > now;
   });
   console.log(`✅ Found ${entries.length} upcoming public event(s) on Luma.`);
-  if (!entries.length) return;
-
   const headers = {
     'Authorization': `Bot ${BOT_TOKEN}`,
     'Content-Type': 'application/json'
   };
+
+  if (!entries.length) {
+    await syncTournaments(headers, now);
+    return;
+  }
 
   console.log('2. Fetching existing Discord Scheduled Events...');
   const discordRes = await fetch(`https://discord.com/api/v10/guilds/${GUILD_ID}/scheduled-events`, { headers });
@@ -109,6 +263,32 @@ async function syncLumaEvents() {
   if (!Array.isArray(discordEventsRaw)) throw new Error('Invalid Discord event list');
   const discordEvents = discordEventsRaw;
   let channelMessages = null;
+  const cityMessagesByChannel = {};
+
+  async function syncCityHub(ev, key, notifyBody, isReminder = false) {
+    const cityChannelId = resolveCityChannelId(ev);
+    if (!cityChannelId) return;
+    if (!cityMessagesByChannel[cityChannelId]) {
+      const res = await fetch(`https://discord.com/api/v10/channels/${cityChannelId}/messages?limit=50`, { headers });
+      cityMessagesByChannel[cityChannelId] = res.ok ? await res.json() : [];
+    }
+    const msgs = cityMessagesByChannel[cityChannelId];
+    if (!Array.isArray(msgs)) return;
+    const exists = msgs.some(msg => {
+      if (!lumaKeys(JSON.stringify(msg)).includes(key)) return false;
+      const isMsgReminder = msg.embeds?.some(e => e.author?.name?.startsWith('⏰') || e.title?.startsWith('⏰'));
+      return isReminder ? isMsgReminder : !isMsgReminder;
+    });
+    if (exists) return;
+    const cityBody = { ...notifyBody, content: '' };
+    console.log(`- Routing ${isReminder ? '7-day reminder' : 'event card'} to city channel (${cityChannelId})...`);
+    await fetch(`https://discord.com/api/v10/channels/${cityChannelId}/messages`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(cityBody)
+    });
+    msgs.push(cityBody);
+  }
 
   for (const entry of entries) {
     const ev = entry.event;
@@ -192,6 +372,9 @@ async function syncLumaEvents() {
       Object.assign(existing, await updateRes.json());
       console.log(`✅ Updated Discord Scheduled Event (ID: ${existing.id}).`);
 
+      const notifyBody = buildNotificationPayload(ev, payload.entity_metadata.location, lumaUrl, embedCoverUrl, false);
+      await syncCityHub(ev, key, notifyBody, false);
+
       const msUntilStart = Date.parse(ev.start_at) - now;
       if (msUntilStart > 6 * DAY_MS && msUntilStart <= 7.6 * DAY_MS) {
         if (!channelMessages) {
@@ -202,8 +385,8 @@ async function syncLumaEvents() {
         const alreadyReminded = Array.isArray(channelMessages) && channelMessages.some(
           msg => msg.embeds?.some(e => e.author?.name?.startsWith('⏰') || e.title?.startsWith('⏰')) && lumaKeys(JSON.stringify(msg)).includes(key)
         );
+        const reminderBody = buildNotificationPayload(ev, payload.entity_metadata.location, lumaUrl, embedCoverUrl, true);
         if (!alreadyReminded) {
-          const reminderBody = buildNotificationPayload(ev, payload.entity_metadata.location, lumaUrl, embedCoverUrl, true);
           console.log('- Sending 7-day reminder in announcements channel...');
           await fetch(`https://discord.com/api/v10/channels/${ANNOUNCEMENT_CHANNEL_ID}/messages`, {
             method: 'POST',
@@ -213,6 +396,7 @@ async function syncLumaEvents() {
           if (Array.isArray(channelMessages)) channelMessages.push(reminderBody);
           console.log('✅ Sent 7-day reminder notification to @everyone');
         }
+        await syncCityHub(ev, key, reminderBody, true);
       }
       continue;
     }
@@ -237,10 +421,13 @@ async function syncLumaEvents() {
         body: JSON.stringify(notifyBody)
       });
       console.log('✅ Sent announcement notification to @everyone');
+      await syncCityHub(ev, key, notifyBody, false);
     } else {
       console.error('Failed to create Discord event:', await createRes.text());
     }
   }
+
+  await syncTournaments(headers, now);
 
   console.log('\nAll Luma events synced!');
 }

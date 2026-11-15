@@ -14,12 +14,12 @@ const discordEvent = {
   description: 'Đăng ký tại: https://lu.ma/meetup-example'
 };
 
-async function run({ events = [lumaEvent], existing = [discordEvent], listStatus = 200, updateStatus = 200, listBody } = {}) {
+async function run({ events = [lumaEvent], existing = [discordEvent], listStatus = 200, updateStatus = 200, listBody, calendarHtml = '', channelMessages = {} } = {}) {
   const writes = [];
   const errors = [];
   const response = (body, status = 200) => ({
     ok: status >= 200 && status < 300, status,
-    json: async () => structuredClone(body), text: async () => JSON.stringify(body),
+    json: async () => structuredClone(body), text: async () => typeof body === 'string' ? body : JSON.stringify(body),
     headers: { get: () => 'image/png' }, arrayBuffer: async () => Buffer.from('image')
   });
   const context = {
@@ -30,9 +30,15 @@ async function run({ events = [lumaEvent], existing = [discordEvent], listStatus
     fetch: async (url, options = {}) => {
       if (url.startsWith('https://api.lu.ma/')) return response({ entries: events.map(event => ({ event })) });
       if (url.startsWith('https://images.lumacdn.com/')) return response({});
+      if (url.startsWith('https://vdn.moji.education/')) return response(calendarHtml);
       if (!url.startsWith('https://discord.com/api/v10/')) throw new Error(`Unexpected URL: ${url}`);
-      if (!options.method) return response(listBody === undefined ? existing : listBody, listStatus);
-      const body = JSON.parse(options.body);
+      if (!options.method) {
+        for (const [chId, msgs] of Object.entries(channelMessages)) {
+          if (url.includes(`/channels/${chId}/messages`)) return response(msgs);
+        }
+        return response(listBody === undefined ? existing : listBody, listStatus);
+      }
+      const body = options.body ? JSON.parse(options.body) : null;
       writes.push({ url, method: options.method, body });
       if (options.method === 'PATCH') return response({ ...discordEvent, ...body }, updateStatus);
       return response({ id: 'created-event', status: 1, ...body });
@@ -144,4 +150,52 @@ test('sends 7-day reminder once for an existing event starting in 7 days', async
   assert.ok(writes[1].url.endsWith('/messages'));
   assert.equal(writes[1].body.embeds[0].author.name, '⏰ NHẮC LỊCH · CÒN 7 NGÀY');
   assert.equal(writes[1].body.embeds[0].title, lumaEvent.name);
+});
+
+test('routes Hanoi and Saigon events to their city channels without @everyone', async () => {
+  const hanoiEvent = { ...lumaEvent, name: '✏️ Hanoi · VDN Meetup', url: 'hanoi-meetup' };
+  const saigonEvent = { ...lumaEvent, name: '🌴 Saigon · VDN Meetup', url: 'saigon-meetup' };
+  const writes = await run({ events: [hanoiEvent, saigonEvent], existing: [] });
+  const cityPosts = writes.filter(w => w.url.includes('/channels/1567848470809804820/') || w.url.includes('/channels/1567848472827138132/'));
+  assert.equal(cityPosts.length, 2);
+  assert.equal(cityPosts[0].body.content, '');
+  assert.equal(cityPosts[1].body.content, '');
+});
+
+test('syncs VDN Championships overview, announces new tournament, and auto-publishes only in championships', async () => {
+  const calendarHtml = `
+    <tr>
+      <td data-label="Ngày thi đấu">13–14/11/2026</td>
+      <td data-label="Giải đấu"><a href="https://moji.education/tournaments/vdn-national-university-championship">VDN National University Championship</a></td>
+      <td data-label="Ban tổ chức">Moji Debate Academy</td>
+      <td data-label="Thể thức">BP</td>
+      <td data-label="Địa điểm/Hình thức">Online</td>
+    </tr>
+    <tr>
+      <td data-label="Ngày thi đấu">29–30/05/2027</td>
+      <td data-label="Giải đấu"><a href="https://moji.education/tournaments/new-cup">VDN Open Cup</a></td>
+      <td data-label="Ban tổ chức">Moji Debate Academy</td>
+      <td data-label="Thể thức">WSDC</td>
+      <td data-label="Địa điểm/Hình thức">Online</td>
+    </tr>`;
+  const overviewMsg = {
+    id: 'overview-msg',
+    flags: 1,
+    embeds: [{
+      title: '🏆 VDN CHAMPIONSHIPS · NĂM HỌC 2026–27',
+      fields: [
+        { name: '🗓️ Lịch giải đấu', value: 'https://vdn.moji.education/calendar', inline: false },
+        { name: '🎓 VDN National University Championship', value: 'OLD DATE · BP · Online\n[Xem chi tiết giải đấu](https://moji.education/tournaments/vdn-national-university-championship)', inline: false }
+      ]
+    }]
+  };
+  const writes = await run({
+    events: [],
+    calendarHtml,
+    channelMessages: { '1567848466904916078': [overviewMsg] }
+  });
+  // 1) PATCH overview message, 2) POST 7-day reminder for University Championship, 3) crosspost reminder, 4) POST new tournament, 5) crosspost new tournament
+  assert.deepEqual(writes.map(w => w.method), ['PATCH', 'POST', 'POST', 'POST', 'POST']);
+  assert.ok(writes[0].url.endsWith('/channels/1567848466904916078/messages/overview-msg'));
+  assert.ok(writes.filter(w => w.url.endsWith('/crosspost')).every(w => w.url.includes('/channels/1567848466904916078/')));
 });
