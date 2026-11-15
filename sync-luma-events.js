@@ -32,7 +32,7 @@ function buildNotificationPayload(ev, location, lumaUrl, isReminder = false) {
       title,
       description: `${lead}\n\n🗓️ **Thời gian:** ${timeStr}\n📍 **Địa điểm:** ${location}`,
       color: 0x5865F2,
-      footer: { text: 'Vietnam Debate Network (VDN) Events' },
+      footer: { text: 'VDN Meetup' },
       timestamp: new Date().toISOString()
     }],
     components: [{
