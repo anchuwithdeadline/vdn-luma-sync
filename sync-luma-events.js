@@ -8,11 +8,38 @@ if (!BOT_TOKEN) {
   process.exit(1);
 }
 
+const DAY_MS = 24 * 3600 * 1000;
+
 function lumaKeys(text) {
-  return [...String(text || '').matchAll(/https:\/\/(?:lu\.ma|luma\.com)\/[^\s<>()\[\]]+/gi)].map(([link]) => {
+  return [...String(text || '').matchAll(/https:\/\/(?:lu\.ma|luma\.com)\/[^\s<>()\[\]"]+/gi)].map(([link]) => {
     const url = new URL(link);
     return url.pathname.replace(/\/$/, '');
   });
+}
+
+function buildNotificationPayload(ev, location, lumaUrl, isReminder = false) {
+  const startDate = new Date(ev.start_at);
+  const endDate = new Date(ev.end_at || startDate.getTime() + 2 * 3600 * 1000);
+  const timeStr = `${startDate.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} - ${endDate.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} (${startDate.toLocaleDateString('vi-VN')})`;
+  const title = isReminder ? `⏰ NHẮC LỊCH: ${ev.name}` : `📢 SỰ KIỆN MỚI: ${ev.name}`;
+  const lead = isReminder
+    ? 'Sự kiện của Vietnam Debate Network sẽ diễn ra sau **7 ngày** nữa! Hãy nhanh tay đăng ký nếu bạn chưa có vé nhé.'
+    : 'Vietnam Debate Network vừa mở đăng ký sự kiện mới trên Luma!';
+
+  return {
+    content: '@everyone',
+    embeds: [{
+      title,
+      description: `${lead}\n\n🗓️ **Thời gian:** ${timeStr}\n📍 **Địa điểm:** ${location}\n\n👉 **Xem chi tiết sự kiện trên đỉnh server hoặc bấm nút bên dưới để nhận vé Luma:**`,
+      color: 0x5865F2,
+      footer: { text: 'Vietnam Debate Network (VDN) Events' },
+      timestamp: new Date().toISOString()
+    }],
+    components: [{
+      type: 1,
+      components: [{ type: 2, style: 5, label: '🎟️ Đăng Ký Vé Trên Luma', url: lumaUrl }]
+    }]
+  };
 }
 
 async function syncLumaEvents() {
@@ -50,6 +77,7 @@ async function syncLumaEvents() {
   const discordEventsRaw = await discordRes.json();
   if (!Array.isArray(discordEventsRaw)) throw new Error('Invalid Discord event list');
   const discordEvents = discordEventsRaw;
+  let channelMessages = null;
 
   for (const entry of entries) {
     const ev = entry.event;
@@ -136,7 +164,30 @@ async function syncLumaEvents() {
       });
       if (!updateRes.ok) throw new Error(`Failed to update Discord event ${existing.id}: ${updateRes.status}`);
       Object.assign(existing, await updateRes.json());
-      console.log(`✅ Updated Discord Scheduled Event (ID: ${existing.id}). No announcement sent.`);
+      console.log(`✅ Updated Discord Scheduled Event (ID: ${existing.id}).`);
+
+      const msUntilStart = Date.parse(ev.start_at) - now;
+      if (msUntilStart > 6 * DAY_MS && msUntilStart <= 7.6 * DAY_MS) {
+        if (!channelMessages) {
+          const msgRes = await fetch(`https://discord.com/api/v10/channels/${ANNOUNCEMENT_CHANNEL_ID}/messages?limit=50`, { headers });
+          channelMessages = msgRes.ok ? await msgRes.json() : [];
+        }
+        // ponytail: scan last 50 channel messages instead of external state DB; upgrade if channel exceeds 50 msgs/day
+        const alreadyReminded = Array.isArray(channelMessages) && channelMessages.some(
+          msg => msg.embeds?.some(e => e.title?.startsWith('⏰ NHẮC LỊCH:')) && lumaKeys(JSON.stringify(msg)).includes(key)
+        );
+        if (!alreadyReminded) {
+          const reminderBody = buildNotificationPayload(ev, payload.entity_metadata.location, lumaUrl, true);
+          console.log('- Sending 7-day reminder in announcements channel...');
+          await fetch(`https://discord.com/api/v10/channels/${ANNOUNCEMENT_CHANNEL_ID}/messages`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(reminderBody)
+          });
+          if (Array.isArray(channelMessages)) channelMessages.push(reminderBody);
+          console.log('✅ Sent 7-day reminder notification to @everyone');
+        }
+      }
       continue;
     }
 
@@ -152,42 +203,12 @@ async function syncLumaEvents() {
       discordEvents.push(created);
       console.log(`🎉 Successfully created Discord Scheduled Event: ${created.name} (ID: ${created.id})`);
 
-      // Post notification in announcements channel
-      const startDate = new Date(ev.start_at);
-      const endDate = new Date(ev.end_at);
-      const timeStr = `${startDate.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} - ${endDate.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })} (${startDate.toLocaleDateString('vi-VN')})`;
-
-      const notifyEmbed = {
-        title: `📢 SỰ KIỆN MỚI: ${ev.name}`,
-        description: `Vietnam Debate Network vừa mở đăng ký sự kiện mới trên Luma!\n\n🗓️ **Thời gian:** ${timeStr}\n📍 **Địa điểm:** ${payload.entity_metadata.location}\n\n👉 **Xem chi tiết sự kiện trên đỉnh server hoặc bấm nút bên dưới để nhận vé Luma:**`,
-        color: 0x5865F2,
-        footer: { text: 'Vietnam Debate Network (VDN) Events' },
-        timestamp: new Date().toISOString()
-      };
-
-      const notifyComponents = [
-        {
-          type: 1,
-          components: [
-            {
-              type: 2,
-              style: 5,
-              label: '🎟️ Đăng Ký Vé Trên Luma',
-              url: lumaUrl
-            }
-          ]
-        }
-      ];
-
+      const notifyBody = buildNotificationPayload(ev, payload.entity_metadata.location, lumaUrl, false);
       console.log('- Sending announcement notification in announcements channel...');
       await fetch(`https://discord.com/api/v10/channels/${ANNOUNCEMENT_CHANNEL_ID}/messages`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({
-          content: '@everyone',
-          embeds: [notifyEmbed],
-          components: notifyComponents
-        })
+        body: JSON.stringify(notifyBody)
       });
       console.log('✅ Sent announcement notification to @everyone');
     } else {

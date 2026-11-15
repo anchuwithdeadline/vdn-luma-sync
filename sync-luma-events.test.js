@@ -136,3 +136,11 @@ test('mixed calendar syncs only future public entries', async () => {
   assert.equal(writes.length, 1);
   assert.equal(writes[0].method, 'PATCH');
 });
+
+test('sends 7-day reminder once for an existing event starting in 7 days', async () => {
+  const reminderEvent = { ...lumaEvent, start_at: '2026-11-13T10:00:00Z', end_at: '2026-11-13T12:00:00Z' };
+  const writes = await run({ events: [reminderEvent, reminderEvent] });
+  assert.deepEqual(writes.map(write => write.method), ['PATCH', 'POST', 'PATCH']);
+  assert.ok(writes[1].url.endsWith('/messages'));
+  assert.ok(writes[1].body.embeds[0].title.startsWith('⏰ NHẮC LỊCH:'));
+});
