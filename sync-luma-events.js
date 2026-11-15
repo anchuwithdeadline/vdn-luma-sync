@@ -17,13 +17,13 @@ function lumaKeys(text) {
   });
 }
 
-function optimizeCoverUrl(url) {
+function optimizeCoverUrl(url, mode = 'square') {
   if (!url) return null;
   if (url.includes('images.lumacdn.com/') && !url.includes('cdn-cgi/image')) {
-    return url.replace(
-      'https://images.lumacdn.com/',
-      'https://images.lumacdn.com/cdn-cgi/image/format=jpeg,fit=cover,quality=80,width=1200,height=630/'
-    );
+    const transform = mode === 'banner'
+      ? 'format=jpeg,fit=pad,background=%2319226d,quality=85,width=1200,height=480'
+      : 'format=jpeg,fit=scale-down,quality=85,width=800';
+    return url.replace('https://images.lumacdn.com/', `https://images.lumacdn.com/cdn-cgi/image/${transform}/`);
   }
   return url;
 }
@@ -160,11 +160,12 @@ async function syncLumaEvents() {
     };
 
     // Download cover image if present
-    const coverUrl = optimizeCoverUrl(ev.cover_url);
-    if (coverUrl) {
+    const embedCoverUrl = optimizeCoverUrl(ev.cover_url, 'square');
+    const bannerCoverUrl = optimizeCoverUrl(ev.cover_url, 'banner');
+    if (bannerCoverUrl) {
       try {
-        console.log(`- Fetching optimized cover image from: ${coverUrl}`);
-        const imgRes = await fetch(coverUrl);
+        console.log(`- Fetching optimized cover image from: ${bannerCoverUrl}`);
+        const imgRes = await fetch(bannerCoverUrl);
         if (imgRes.ok) {
           const buffer = Buffer.from(await imgRes.arrayBuffer());
           const mime = imgRes.headers.get('content-type') || 'image/jpeg';
@@ -202,7 +203,7 @@ async function syncLumaEvents() {
           msg => msg.embeds?.some(e => e.author?.name?.startsWith('⏰') || e.title?.startsWith('⏰')) && lumaKeys(JSON.stringify(msg)).includes(key)
         );
         if (!alreadyReminded) {
-          const reminderBody = buildNotificationPayload(ev, payload.entity_metadata.location, lumaUrl, coverUrl, true);
+          const reminderBody = buildNotificationPayload(ev, payload.entity_metadata.location, lumaUrl, embedCoverUrl, true);
           console.log('- Sending 7-day reminder in announcements channel...');
           await fetch(`https://discord.com/api/v10/channels/${ANNOUNCEMENT_CHANNEL_ID}/messages`, {
             method: 'POST',
@@ -228,7 +229,7 @@ async function syncLumaEvents() {
       discordEvents.push(created);
       console.log(`🎉 Successfully created Discord Scheduled Event: ${created.name} (ID: ${created.id})`);
 
-      const notifyBody = buildNotificationPayload(ev, payload.entity_metadata.location, lumaUrl, coverUrl, false);
+      const notifyBody = buildNotificationPayload(ev, payload.entity_metadata.location, lumaUrl, embedCoverUrl, false);
       console.log('- Sending announcement notification in announcements channel...');
       await fetch(`https://discord.com/api/v10/channels/${ANNOUNCEMENT_CHANNEL_ID}/messages`, {
         method: 'POST',
