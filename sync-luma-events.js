@@ -37,7 +37,7 @@ function buildNotificationPayload(ev, location, lumaUrl, isReminder = false) {
     }],
     components: [{
       type: 1,
-      components: [{ type: 2, style: 5, label: '🎟️ Đăng Ký Vé Trên Luma', url: lumaUrl }]
+      components: [{ type: 2, style: 5, label: '🎟️ Đăng Ký Tham Gia', url: lumaUrl }]
     }]
   };
 }
